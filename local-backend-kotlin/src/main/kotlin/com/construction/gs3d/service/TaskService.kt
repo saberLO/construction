@@ -1,10 +1,12 @@
 package com.construction.gs3d.service
 
 import com.construction.gs3d.model.Task
+import com.construction.gs3d.model.TaskStage
 import com.construction.gs3d.model.TaskStatus
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
+import org.slf4j.MDC
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.io.File
@@ -34,9 +36,10 @@ class TaskService(
             runCatching {
                 val task = mapper.readValue<Task>(meta)
                 if (task.status == TaskStatus.running) {
+                    log.warn("任务 {} 在服务重启时处于 running 状态（stage={}），标记为 failed", task.taskId, task.stage)
                     store[task.taskId] = task.copy(
                         status = TaskStatus.failed,
-                        message = "服务重启，任务中断，请重新提交"
+                        message = "服务重启，任务中断（stage=${task.stage.toJson()}），请断点续跑"
                     ).also { save(it) }
                 } else {
                     store[task.taskId] = task
@@ -62,6 +65,20 @@ class TaskService(
         save(task)
     }
 
+    /**
+     * 便捷方法：更新进度、消息、阶段和状态，同时写日志。
+     * 由 PipelineService 和 PipelineStages 使用。
+     */
+    fun updateProgress(id: String, progress: Int, message: String, stage: TaskStage? = null, status: TaskStatus? = null) {
+        update(id) {
+            this.progress = progress
+            this.message = message
+            stage?.let { this.stage = it }
+            status?.let { this.status = it }
+        }
+        writeLog(id, "INFO ", message)
+    }
+
     fun delete(id: String) {
         store.remove(id)
         File(tasksDir, id).deleteRecursively()
@@ -75,7 +92,12 @@ class TaskService(
         val ts = Instant.now().toString().replace("T", " ").take(19)
         val line = "[$ts] [$level] $msg\n"
         logFile(id).appendText(line)
-        log.info("[${id.take(8)}] $msg")
+        MDC.put("taskId", id.take(8))
+        try {
+            log.info("[${id.take(8)}] $msg")
+        } finally {
+            MDC.remove("taskId")
+        }
     }
 
     private fun save(task: Task) {

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Download, ArrowRight, FileBox, AlertCircle, Clock } from 'lucide-react'
+import { useSelectedTask } from '../hooks/useTasks'
 
 const FORMATS = [
   { ext: 'PLY',   desc: '点云通用格式', note: '兼容 CloudCompare、MeshLab' },
@@ -10,9 +11,13 @@ const FORMATS = [
   { ext: 'SPLAT', desc: '3DGS 原生',    note: '高斯泼溅实时渲染', available: true },
 ]
 
-export default function FormatConverter({ taskId, taskName, taskStatus }) {
+export default function FormatConverter() {
   const [selected, setSelected] = useState(null)
-  const isCompleted = taskStatus === 'completed'
+  const task = useSelectedTask()
+
+  const taskId = task?.task_id
+  const taskName = task?.name
+  const isCompleted = task?.status === 'completed'
 
   if (!taskId) {
     return (

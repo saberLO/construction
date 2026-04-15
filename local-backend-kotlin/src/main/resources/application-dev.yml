@@ -1,0 +1,15 @@
+# 开发用 profile — 使用占位符避免校验阻止启动
+# 启动方式：--spring.profiles.active=dev
+# 实际开发时通过环境变量覆盖
+
+ssh:
+  host: ${SSH_HOST:localhost}
+  port: ${SSH_PORT:22}
+  username: ${SSH_USERNAME:dev}
+  password: ${SSH_PASSWORD:dev}
+
+remote:
+  work-dir: ${REMOTE_WORK_DIR:/tmp/gs-tasks}
+  python-bin: ${REMOTE_PYTHON_BIN:python3}
+  train-script: ${REMOTE_TRAIN_SCRIPT:/tmp/train.py}
+  ply2splat-script: ${REMOTE_PLY2SPLAT_SCRIPT:/tmp/ply2splat.py}

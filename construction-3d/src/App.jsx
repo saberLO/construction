@@ -1,9 +1,11 @@
-import { useState, lazy, Suspense } from 'react'
+import { lazy, Suspense } from 'react'
 import { Upload, Box, ArrowLeftRight, HardDrive, Layers, Search } from 'lucide-react'
 import TaskSubmit from './components/TaskSubmit'
 import FormatConverter from './components/FormatConverter'
 import TaskList from './components/TaskList'
 import ErrorBoundary from './components/ErrorBoundary'
+import useUIStore from './stores/uiStore'
+import { useSelectedTask } from './hooks/useTasks'
 import './styles/index.css'
 
 const ModelViewer = lazy(() => import('./components/ModelViewer'))
@@ -30,33 +32,9 @@ const TABS = [
 ]
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('submit')
-  const [selectedTask, setSelectedTask] = useState(null)
-
-  const handleTabChange = (tabId) => {
-    setActiveTab(tabId)
-    if (tabId === 'submit') {
-      setSelectedTask(null)
-    }
-  }
-
-  const handleTaskCreated = (task) => {
-    setSelectedTask(task)
-    setActiveTab('viewer')
-  }
-
-  const handleSelectTask = (task, options = {}) => {
-    const { shouldOpenViewer = true } = options
-    setSelectedTask(task)
-    if (!shouldOpenViewer || !task) return
-
-    if (task.status === 'completed') {
-      setActiveTab('viewer')
-      return
-    }
-
-    setActiveTab('submit')
-  }
+  const activeTab = useUIStore((s) => s.activeTab)
+  const switchTab = useUIStore((s) => s.switchTab)
+  const selectedTask = useSelectedTask()
 
   const modelUrl = selectedTask?.result?.splat_url
     || selectedTask?.result?.ply_url
@@ -86,7 +64,7 @@ export default function App() {
                 role="tab"
                 aria-selected={activeTab === tab.id}
                 className={`nav-btn ${activeTab === tab.id ? 'active' : ''}`}
-                onClick={() => handleTabChange(tab.id)}
+                onClick={() => switchTab(tab.id)}
               >
                 <Icon size={14} aria-hidden="true" />
                 {tab.label}
@@ -98,10 +76,7 @@ export default function App() {
 
       <div className="main-layout">
         <aside className="sidebar" aria-label="任务列表">
-          <TaskList
-            selectedTaskId={selectedTask?.task_id}
-            onSelectTask={handleSelectTask}
-          />
+          <TaskList />
         </aside>
 
         <main className="content-area">
@@ -115,10 +90,7 @@ export default function App() {
                   上传无人机拍摄的照片或视频，系统将自动运行 COLMAP + 3DGS 完成三维重建
                 </p>
               </div>
-              <TaskSubmit
-                currentTask={selectedTask}
-                onTaskCreated={handleTaskCreated}
-              />
+              <TaskSubmit />
             </div>
           </div>
 
@@ -144,11 +116,7 @@ export default function App() {
                   将已完成的 3DGS 模型导出为其他格式，方便在不同工具链中复用。
                 </p>
               </div>
-              <FormatConverter
-                taskId={selectedTask?.task_id}
-                taskName={selectedTask?.name}
-                taskStatus={selectedTask?.status}
-              />
+              <FormatConverter />
             </div>
           </div>
 

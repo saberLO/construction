@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { Upload, X, Image, Film, AlertCircle, CheckCircle, Loader } from 'lucide-react'
-import { submitTask } from '../services/api'
+import { useSubmitTask, useSelectedTask } from '../hooks/useTasks'
+import useUIStore from '../stores/uiStore'
 import { formatSize } from '../utils/format'
 
 const QUALITY_OPTIONS = [
@@ -14,7 +15,7 @@ const MATCHER_OPTIONS = [
   { value: 'sequential', label: '视频裁切', detail: 'sequential_matcher 重叠15' },
 ]
 
-export default function TaskSubmit({ currentTask, onTaskCreated }) {
+export default function TaskSubmit() {
   const [files,          setFiles]          = useState([])
   const [isDragOver,     setIsDragOver]     = useState(false)
   const [taskName,       setTaskName]       = useState('')
@@ -22,9 +23,13 @@ export default function TaskSubmit({ currentTask, onTaskCreated }) {
   const [colmapMatcher,  setColmapMatcher]  = useState('exhaustive')
   const [phase,          setPhase]          = useState('idle')   // idle | uploading | success | error
   const [uploadProgress, setUploadProgress] = useState(0)
-  const [taskStatus,     setTaskStatus]     = useState(null)
+  const [createdTaskId,  setCreatedTaskId]  = useState(null)
   const [error,          setError]          = useState('')
   const inputRef = useRef(null)
+
+  const currentTask = useSelectedTask()
+  const onTaskCreated = useUIStore((s) => s.onTaskCreated)
+  const submitMutation = useSubmitTask()
 
   const ALLOWED_EXT = ['jpg', 'jpeg', 'png', 'tiff', 'tif', 'mp4', 'mov', 'avi']
 
@@ -49,15 +54,21 @@ export default function TaskSubmit({ currentTask, onTaskCreated }) {
 
     try {
       const name = taskName.trim() || `工地任务_${new Date().toLocaleString('zh-CN')}`
-      const result = await submitTask(files, { quality, name, colmap_matcher: colmapMatcher }, setUploadProgress)
+      const result = await submitMutation.mutateAsync({
+        files,
+        options: { quality, name, colmap_matcher: colmapMatcher },
+        onProgress: setUploadProgress,
+      })
 
       setPhase('success')
-      setTaskStatus({ task_id: result.task_id, name, status: 'pending', progress: 0 })
-
-      onTaskCreated?.({ task_id: result.task_id, name, status: 'pending', file_count: files.length })
+      setCreatedTaskId(result.task_id)
+      onTaskCreated(result.task_id)
 
     } catch (err) {
-      setError(err.message || '提交失败，请检查后端服务是否运行')
+      const msg = err.response?.status === 503
+        ? '服务繁忙，请稍后再试'
+        : (err.message || '提交失败，请检查后端服务是否运行')
+      setError(msg)
       setPhase('error')
     }
   }
@@ -66,7 +77,7 @@ export default function TaskSubmit({ currentTask, onTaskCreated }) {
     setFiles([])
     setPhase('idle')
     setUploadProgress(0)
-    setTaskStatus(null)
+    setCreatedTaskId(null)
     setError('')
     setTaskName('')
     if (inputRef.current) inputRef.current.value = ''
@@ -74,7 +85,7 @@ export default function TaskSubmit({ currentTask, onTaskCreated }) {
 
   const totalSize = files.reduce((s, f) => s + f.size, 0)
 
-  // 当前选中任务的简要状态（从 TaskList 实时同步）
+  // 当前选中任务的简要状态（从 react-query 缓存实时派生）
   const renderCurrentTaskStatus = () => {
     if (!currentTask) return null
     return (
@@ -118,7 +129,7 @@ export default function TaskSubmit({ currentTask, onTaskCreated }) {
                 任务已提交！
               </h3>
               <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 24 }}>
-                任务 ID：{taskStatus?.task_id?.slice(0, 8)}... · 请在左侧任务列表中查看进度并等待训练完成。
+                任务 ID：{createdTaskId?.slice(0, 8)}... · 请在左侧任务列表中查看进度并等待训练完成。
               </p>
               <button className="btn btn-secondary" onClick={handleReset}>提交新任务</button>
             </div>
@@ -174,7 +185,7 @@ export default function TaskSubmit({ currentTask, onTaskCreated }) {
   return (
     <div style={{ padding: 16, overflowY: 'auto', flex: 1 }}>
 
-      {/* 当前选中任务的实时状态（来自左侧列表） */}
+      {/* 当前选中任务的实时状态（从 react-query 缓存派生） */}
       {renderCurrentTaskStatus()}
 
       {/* 上传区 */}

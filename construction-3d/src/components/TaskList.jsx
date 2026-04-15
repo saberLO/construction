@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
 import { RefreshCw, Trash2, RotateCcw } from 'lucide-react'
-import { listTasks, deleteTask, resumeTask } from '../services/api'
+import { useTasks, useDeleteTask, useResumeTask } from '../hooks/useTasks'
+import useUIStore from '../stores/uiStore'
 import { formatTime } from '../utils/format'
 
 function StatusBadge({ status }) {
@@ -19,69 +19,22 @@ function StatusBadge({ status }) {
   )
 }
 
-export default function TaskList({ selectedTaskId, onSelectTask }) {
-  const [tasks, setTasks]       = useState([])
-  const [loading, setLoading]   = useState(false)
-  const [total, setTotal]       = useState(0)
-  const [resuming, setResuming] = useState(null)
+export default function TaskList() {
+  const { data, isLoading, refetch } = useTasks()
+  const tasks = data?.tasks || []
+  const total = data?.total || 0
 
-  const selectedTaskIdRef = useRef(selectedTaskId)
-  const onSelectTaskRef   = useRef(onSelectTask)
+  const selectedTaskId = useUIStore((s) => s.selectedTaskId)
+  const selectTask = useUIStore((s) => s.selectTask)
 
-  useEffect(() => { selectedTaskIdRef.current = selectedTaskId }, [selectedTaskId])
-  useEffect(() => { onSelectTaskRef.current = onSelectTask }, [onSelectTask])
-
-  const fetchTasks = useCallback(async () => {
-    try {
-      setLoading(true)
-      const data = await listTasks(1, 20)
-      setTasks(data.tasks || [])
-      setTotal(data.total || 0)
-
-      const currentId = selectedTaskIdRef.current
-      if (currentId && data.tasks) {
-        const updated = data.tasks.find(t => t.task_id === currentId)
-        if (updated) {
-          onSelectTaskRef.current?.(updated, { shouldOpenViewer: false })
-        }
-      }
-    } catch (err) {
-      console.error('[TaskList] 获取任务列表失败:', err.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchTasks()
-
-    let timer = setInterval(fetchTasks, 5000)
-
-    const handleVisibility = () => {
-      if (document.hidden) {
-        clearInterval(timer)
-        timer = null
-      } else {
-        fetchTasks()
-        timer = setInterval(fetchTasks, 5000)
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibility)
-
-    return () => {
-      if (timer) clearInterval(timer)
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [fetchTasks])
+  const deleteMutation = useDeleteTask()
+  const resumeMutation = useResumeTask()
 
   const handleDelete = async (e, taskId) => {
     e.stopPropagation()
     if (!confirm('确认删除此任务及其模型文件？')) return
     try {
-      await deleteTask(taskId)
-      setTasks(prev => prev.filter(t => t.task_id !== taskId))
-      setTotal(prev => Math.max(0, prev - 1))
+      await deleteMutation.mutateAsync(taskId)
     } catch (err) {
       alert('删除失败：' + err.message)
     }
@@ -89,14 +42,10 @@ export default function TaskList({ selectedTaskId, onSelectTask }) {
 
   const handleResume = async (e, taskId) => {
     e.stopPropagation()
-    setResuming(taskId)
     try {
-      await resumeTask(taskId)
-      await fetchTasks()
+      await resumeMutation.mutateAsync(taskId)
     } catch (err) {
       alert('续跑失败：' + (err.response?.data?.error || err.message))
-    } finally {
-      setResuming(null)
     }
   }
 
@@ -114,12 +63,12 @@ export default function TaskList({ selectedTaskId, onSelectTask }) {
         </span>
         <button
           className="btn btn-ghost btn-sm"
-          onClick={fetchTasks}
-          disabled={loading}
+          onClick={() => refetch()}
+          disabled={isLoading}
           title="刷新"
           aria-label="刷新任务列表"
         >
-          <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+          <RefreshCw size={13} style={{ animation: isLoading ? 'spin 1s linear infinite' : 'none' }} />
         </button>
       </div>
 
@@ -135,10 +84,7 @@ export default function TaskList({ selectedTaskId, onSelectTask }) {
             <div
               key={task.task_id}
               className={`task-item ${selectedTaskId === task.task_id ? 'active' : ''}`}
-              onClick={() => onSelectTask(
-                selectedTaskId === task.task_id ? null : task,
-                { shouldOpenViewer: selectedTaskId !== task.task_id }
-              )}
+              onClick={() => selectTask(task.task_id, task.status)}
             >
               <div className="task-name" title={task.name}>{task.name}</div>
               <div className="task-meta" style={{ marginTop: 4 }}>
@@ -173,12 +119,16 @@ export default function TaskList({ selectedTaskId, onSelectTask }) {
                       border: '1px solid rgba(45,156,255,0.3)', borderRadius: 'var(--radius)',
                       fontSize: 11, fontWeight: 600, gap: 6,
                     }}
-                    disabled={resuming === task.task_id}
+                    disabled={resumeMutation.isPending && resumeMutation.variables === task.task_id}
                     onClick={e => handleResume(e, task.task_id)}
                     aria-label={`断点续跑任务 ${task.name}`}
                   >
-                    <RotateCcw size={11} style={{ animation: resuming === task.task_id ? 'spin 1s linear infinite' : 'none' }} />
-                    {resuming === task.task_id ? '正在重试...' : '断点续跑'}
+                    <RotateCcw size={11} style={{
+                      animation: (resumeMutation.isPending && resumeMutation.variables === task.task_id)
+                        ? 'spin 1s linear infinite' : 'none'
+                    }} />
+                    {resumeMutation.isPending && resumeMutation.variables === task.task_id
+                      ? '正在重试...' : '断点续跑'}
                   </button>
                 </div>
               )}

@@ -13,7 +13,7 @@ data class Task(
     val taskId: String,
     var name: String,
     var status: TaskStatus = TaskStatus.pending,
-    var stage: String = "created",
+    var stage: TaskStage = TaskStage.CREATED,
     var progress: Int = 0,
     var message: String = "任务已创建，准备上传...",
     val quality: String = "medium",

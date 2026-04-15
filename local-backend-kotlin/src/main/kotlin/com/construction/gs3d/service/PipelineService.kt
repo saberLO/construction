@@ -3,19 +3,15 @@ package com.construction.gs3d.service
 import com.construction.gs3d.config.IterationProperties
 import com.construction.gs3d.config.RemoteProperties
 import com.construction.gs3d.model.TaskResult
+import com.construction.gs3d.model.TaskStage
 import com.construction.gs3d.model.TaskStatus
 import com.construction.gs3d.ssh.SshClientFactory
 import com.construction.gs3d.ssh.downloadFile
 import com.construction.gs3d.ssh.execRemote
-import com.construction.gs3d.ssh.uploadDirectoryResume
 import net.schmizz.sshj.SSHClient
 import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Service
 import java.io.File
-
-private val STAGE_ORDER = listOf("created", "uploaded", "colmap_mapped", "trained", "splat_ready", "downloaded", "completed")
-private fun stageGte(stage: String?, target: String) =
-    STAGE_ORDER.indexOf(stage ?: "created").let { a -> STAGE_ORDER.indexOf(target).let { b -> b != -1 && a >= b } }
 
 @Service
 class PipelineService(
@@ -27,16 +23,7 @@ class PipelineService(
     private fun info(id: String, msg: String) = taskService.writeLog(id, "INFO ", msg)
     private fun error(id: String, msg: String) = taskService.writeLog(id, "ERROR", msg)
 
-    private fun update(id: String, progress: Int? = null, message: String? = null, stage: String? = null, status: TaskStatus? = null) {
-        taskService.update(id) {
-            progress?.let { this.progress = it }
-            message?.let { this.message = it; info(id, it) }
-            stage?.let { this.stage = it }
-            status?.let { this.status = it }
-        }
-    }
-
-    @Async
+    @Async("pipelineExecutor")
     fun run(taskId: String) {
         val task = taskService.get(taskId) ?: return
         val iters = iterations.forQuality(task.quality)
@@ -50,7 +37,7 @@ class PipelineService(
         info(taskId, "=".repeat(60))
 
         val ssh = try {
-            update(taskId, 2, "连接云端服务器...", status = TaskStatus.running)
+            taskService.updateProgress(taskId, 2, "连接云端服务器...", status = TaskStatus.running)
             sshFactory.connect().also { info(taskId, "SSH 连接成功") }
         } catch (e: Exception) {
             error(taskId, "SSH 连接失败: ${e.message}")
@@ -60,111 +47,40 @@ class PipelineService(
 
         try {
             taskService.update(taskId) { this.remoteRoot = remoteRoot; this.iterations = iters }
-            if (task.stage != "created" || task.remoteRoot != null) {
+            if (task.stage != TaskStage.CREATED || task.remoteRoot != null) {
                 terminateRemoteTaskProcesses(ssh, taskId, remoteRoot)
             }
 
             // Step 1: 创建云端目录
-            update(taskId, 4, "初始化云端目录...")
+            taskService.updateProgress(taskId, 4, "初始化云端目录...")
             ssh.execRemote("mkdir -p $remoteInput $remoteOutput")
 
             // Step 2: 上传图片（断点续传）
-            if (!stageGte(task.stage, "uploaded")) {
+            if (!task.stage.isAtLeast(TaskStage.UPLOADED)) {
                 val inputDir = task.localInputDir?.let { File(it) }
                     ?: throw RuntimeException("找不到本地输入目录，请重新上传照片")
-                update(taskId, 5, "上传照片到云端（支持断点续传）...")
-                ssh.uploadDirectoryResume(inputDir, remoteInput) { done, total, filename ->
-                    val pct = (5 + done.toDouble() / total * 20).toInt()
-                    taskService.update(taskId) { progress = pct; message = "上传照片 $done/$total：$filename" }
-                }
-                update(taskId, 25, "照片上传完成", stage = "uploaded")
+                PipelineStages.executeUpload(ssh, taskId, taskService, inputDir, remoteInput)
             } else {
-                update(taskId, 25, "已上传完成，跳过上传")
+                taskService.updateProgress(taskId, 25, "已上传完成，跳过上传")
             }
 
             // Step 3: COLMAP
-            if (!stageGte(task.stage, "colmap_mapped")) {
+            if (!task.stage.isAtLeast(TaskStage.COLMAP_MAPPED)) {
                 resetIncompleteColmapWorkspace(ssh, taskId, remoteRoot)
-                update(taskId, 26, "COLMAP 特征提取中...")
-                val colmapStart = System.currentTimeMillis()
-                val matcherArg = if (task.colmapMatcher == "sequential") "--colmap_matcher sequential_matcher" else ""
-                ssh.execRemote("cd /data/gaussian-splatting && ${remote.pythonBin} convert.py -s $remoteRoot $matcherArg".trim()) { line ->
-                    taskService.writeLog(taskId, "COLMAP", line.replace(Regex("\\[std\\w+\\] "), "").trim())
-                    when {
-                        line.contains("Processed file") ->
-                            line.find(Regex("\\[(\\d+)/(\\d+)\\]"))?.let {
-                                taskService.update(taskId) { progress = 28; message = "COLMAP 特征提取 ${it.groupValues[1]}/${it.groupValues[2]} 张" }
-                            }
-                        line.contains("Matching block") -> taskService.update(taskId) { progress = 33; message = "COLMAP 特征匹配中..." }
-                        line.contains("Registering image") -> taskService.update(taskId) { progress = 38; message = "COLMAP 稀疏重建中..." }
-                        line.contains("Global bundle adjustment") -> taskService.update(taskId) { progress = 40; message = "COLMAP 全局优化中..." }
-                        line.contains("ndistort") -> taskService.update(taskId) { progress = 41; message = "COLMAP 畸变校正中..." }
-                    }
-                }
-                ssh.execRemote(
-                    "test -f $remoteRoot/sparse/0/cameras.bin && echo 'sparse OK' || " +
-                    "{ echo 'COLMAP失败：sparse/0/cameras.bin 不存在'; exit 1; }"
-                ) { info(taskId, it.replace(Regex("\\[std\\w+\\] "), "")) }
-
-                var imgCount = 0
-                ssh.execRemote("ls $remoteRoot/images/ 2>/dev/null | wc -l") { line ->
-                    imgCount = line.replace(Regex("\\[stdout\\] "), "").trim().toIntOrNull() ?: 0
-                }
-                val colmapSec = (System.currentTimeMillis() - colmapStart) / 1000
-                update(taskId, 42, "COLMAP 完成（${imgCount}张图片，耗时${colmapSec}s）", stage = "colmap_mapped")
+                PipelineStages.executeColmap(ssh, taskId, taskService, remote, remoteRoot, task.colmapMatcher)
             }
 
             // Step 4: 3DGS 训练
-            if (!stageGte(task.stage, "trained")) {
-                update(taskId, 45, "3DGS 训练开始（$iters 迭代）...")
-                val trainStart = System.currentTimeMillis()
-                var lastPsnr: Double? = null
-                ssh.execRemote(
-                    "${remote.pythonBin} ${remote.trainScript} -s $remoteRoot -m $remoteOutput --iterations $iters --save_iterations $iters"
-                ) { line ->
-                    val clean = line.replace(Regex("\\[std\\w+\\] "), "").trim()
-                    if (line.startsWith("[stderr]") || clean.contains("traceback", ignoreCase = true) ||
-                        clean.contains("error", ignoreCase = true) || clean.contains("exception", ignoreCase = true) ||
-                        clean.contains("cuda", ignoreCase = true) || clean.contains("memory", ignoreCase = true)
-                    ) {
-                        taskService.writeLog(taskId, "TRAIN", clean)
-                    }
-                    if (clean.contains("[ITER") && clean.contains("PSNR")) {
-                        taskService.writeLog(taskId, "INFO ", "[训练] $clean")
-                        clean.find(Regex("PSNR ([\\d.]+)"))?.let { lastPsnr = it.groupValues[1].toDoubleOrNull() }
-                    }
-                    clean.find(Regex("Training progress.*?(\\d+)%.*?(\\d+)/(\\d+)"))?.let { m ->
-                        val done = m.groupValues[2].toInt(); val total = m.groupValues[3].toInt()
-                        val pct = (45 + done.toDouble() / total * 43).toInt()
-                        val elapsed = (System.currentTimeMillis() - trainStart) / 1000.0
-                        val remaining = if (elapsed > 0) ((total - done) / (done / elapsed)).toLong() else 0L
-                        val eta = if (remaining > 60) "${remaining / 60}分${remaining % 60}秒" else "${remaining}秒"
-                        taskService.update(taskId) {
-                            progress = pct
-                            message = "3DGS训练 $done/$total 轮${lastPsnr?.let { "  PSNR=${"%.1f".format(it)}dB" } ?: ""}  预计剩余 $eta"
-                        }
-                    }
-                }
-                val trainSec = (System.currentTimeMillis() - trainStart) / 1000
-                info(taskId, "3DGS训练完成，耗时${trainSec / 60}分${trainSec % 60}秒，最终PSNR=${lastPsnr?.let { "${"%.2f".format(it)}dB" } ?: "N/A"}")
-                taskService.update(taskId) { stage = "trained" }
+            if (!task.stage.isAtLeast(TaskStage.TRAINED)) {
+                PipelineStages.executeTraining(ssh, taskId, taskService, remote, remoteRoot, remoteOutput, iters)
             }
 
-            // Step 5: PLY → SPLAT
-            update(taskId, 89, "转换为 splat 格式...")
-            val remotePly = "$remoteOutput/point_cloud/iteration_$iters/point_cloud.ply"
-            val remoteSplat = "$remoteRoot/scene.splat"
-            ssh.execRemote("${remote.pythonBin} ${remote.ply2splatScript} $remotePly $remoteSplat")
+            // Step 5+6: PLY → SPLAT + 下载模型
+            val localSplat = PipelineStages.executeConvertAndDownload(
+                ssh, taskId, taskService, remote, remoteRoot, remoteOutput, localModelDir, iters
+            )
 
-            // Step 6: 下载模型
-            update(taskId, 92, "下载模型到本地...")
-            val localSplat = File(localModelDir, "scene.splat")
-            ssh.downloadFile(remoteSplat, localSplat) { transferred, total ->
-                val pct = (92 + transferred.toDouble() / total * 7).toInt()
-                taskService.update(taskId) { progress = pct; message = "下载模型 ${formatBytes(transferred)} / ${formatBytes(total)}" }
-            }
-
-            update(taskId, 99, "导出相机参数...")
+            taskService.updateProgress(taskId, 99, "导出相机参数...")
             tryExportColmapCameras(ssh, remoteRoot, localModelDir, taskId)
 
             ssh.close()
@@ -176,6 +92,7 @@ class PipelineService(
             val camerasJson = File(localModelDir, "cameras.json")
             taskService.update(taskId) {
                 status = TaskStatus.completed; progress = 100
+                stage = TaskStage.COMPLETED
                 message = "建模完成！模型大小 $sizeMB MB"
                 result = TaskResult(
                     splatUrl = "/models/$taskId/scene.splat",
@@ -193,8 +110,6 @@ class PipelineService(
             taskService.update(taskId) { status = TaskStatus.failed; message = e.message ?: "训练失败，请查看后端日志" }
         }
     }
-
-    private fun formatBytes(b: Long) = if (b < 1024 * 1024) "${"%.1f".format(b / 1024.0)} KB" else "${"%.1f".format(b / 1024.0 / 1024)} MB"
 
     private fun terminateRemoteTaskProcesses(ssh: SSHClient, taskId: String, remoteRoot: String) {
         val qRoot = shQuote(remoteRoot)
@@ -257,7 +172,7 @@ class PipelineService(
             ssh.downloadFile(remoteCameras, tmpCam) { transferred, total ->
                 taskService.update(taskId) {
                     progress = 99
-                    message = "下载相机参数 cameras.txt ${formatBytes(transferred)} / ${formatBytes(total)}"
+                    message = "下载相机参数 cameras.txt ${PipelineStages.formatBytes(transferred)} / ${PipelineStages.formatBytes(total)}"
                 }
             }
             tmpCam.exists() && tmpCam.length() > 0L
@@ -267,7 +182,7 @@ class PipelineService(
                 ssh.downloadFile(remoteImages, tmpImg) { transferred, total ->
                     taskService.update(taskId) {
                         progress = 99
-                        message = "下载相机参数 images.txt ${formatBytes(transferred)} / ${formatBytes(total)}"
+                        message = "下载相机参数 images.txt ${PipelineStages.formatBytes(transferred)} / ${PipelineStages.formatBytes(total)}"
                     }
                 }
                 tmpImg.exists() && tmpImg.length() > 0L
@@ -289,5 +204,3 @@ class PipelineService(
         tmpImg.delete()
     }
 }
-
-private fun String.find(regex: Regex) = regex.find(this)

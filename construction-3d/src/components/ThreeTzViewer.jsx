@@ -41,6 +41,7 @@ const ThreeTzViewer = forwardRef(function ThreeTzViewer(
     mounted: true,
     fitted: false,
     settled: false,
+    loadToken: 0,
   })
 
   /* ── 暴露给父组件的方法 ──────────────────────────────────── */
@@ -73,6 +74,8 @@ const ThreeTzViewer = forwardRef(function ThreeTzViewer(
   /* ── 清理函数 ────────────────────────────────────────────── */
   const cleanup = useCallback(() => {
     const s = stateRef.current
+    s.loadToken += 1
+
     if (s.raf) {
       cancelAnimationFrame(s.raf)
       s.raf = null
@@ -116,14 +119,17 @@ const ThreeTzViewer = forwardRef(function ThreeTzViewer(
   async function loadAndRender(f) {
     cleanup()
     const s = stateRef.current
+    const loadToken = s.loadToken
 
     try {
       /* 1. 解压 .3tz */
       const result = await parseThreeTzFile(f, (msg, pct) => {
-        if (s.mounted) onProgress?.(msg, pct)
+        if (s.mounted && stateRef.current.loadToken === loadToken) {
+          onProgress?.(msg, pct)
+        }
       })
 
-      if (!s.mounted || !containerRef.current) {
+      if (!s.mounted || !containerRef.current || stateRef.current.loadToken !== loadToken) {
         result.dispose()
         return
       }
@@ -180,14 +186,14 @@ const ThreeTzViewer = forwardRef(function ThreeTzViewer(
       s.tiles = tiles
 
       const finishLoaded = (info) => {
-        if (s.settled || !s.mounted) return
+        if (s.settled || !s.mounted || stateRef.current.loadToken !== loadToken) return
         s.settled = true
         s.fitted = true
         onLoaded?.(info)
       }
 
       const failLoading = (message) => {
-        if (s.settled || !s.mounted) return
+        if (s.settled || !s.mounted || stateRef.current.loadToken !== loadToken) return
         s.settled = true
         onError?.(message)
       }
@@ -234,7 +240,7 @@ const ThreeTzViewer = forwardRef(function ThreeTzViewer(
 
       /* 4. 尺寸监听 */
       const onResize = () => {
-        if (!s.mounted || !container) return
+        if (!s.mounted || !container || stateRef.current.loadToken !== loadToken) return
         const nw = container.clientWidth
         const nh = container.clientHeight
         if (nw <= 0 || nh <= 0) return
@@ -249,7 +255,7 @@ const ThreeTzViewer = forwardRef(function ThreeTzViewer(
       /* 5. 渲染循环 */
       let frameCount = 0
       function animate() {
-        if (!s.mounted) return
+        if (!s.mounted || stateRef.current.loadToken !== loadToken) return
         s.raf = requestAnimationFrame(animate)
 
         try {
@@ -310,7 +316,9 @@ const ThreeTzViewer = forwardRef(function ThreeTzViewer(
 
     } catch (e) {
       console.error('[ThreeTzViewer] 加载失败:', e)
-      if (s.mounted) onError?.(e.message || '加载 .3tz 文件失败')
+      if (s.mounted && stateRef.current.loadToken === loadToken) {
+        onError?.(e.message || '加载 .3tz 文件失败')
+      }
     }
   }
 

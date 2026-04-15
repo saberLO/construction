@@ -14,6 +14,7 @@ import org.springframework.web.multipart.MultipartFile
 import java.io.File
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.RejectedExecutionException
 
 @RestController
 class TaskController(
@@ -65,7 +66,13 @@ class TaskController(
             updatedAt = now,
         )
         taskService.put(task)
-        pipeline.run(taskId)
+        try {
+            pipeline.run(taskId)
+        } catch (e: RejectedExecutionException) {
+            taskService.update(taskId) { status = TaskStatus.failed; message = "服务繁忙，请稍后再试" }
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(mapOf("error" to "服务繁忙，任务队列已满，请稍后再试"))
+        }
         return ResponseEntity.ok(mapOf("task_id" to taskId, "status" to "pending"))
     }
 
@@ -77,7 +84,13 @@ class TaskController(
         if (task.status == TaskStatus.completed) return ResponseEntity.badRequest().body(mapOf("error" to "任务已完成"))
         if (task.status == TaskStatus.running)   return ResponseEntity.badRequest().body(mapOf("error" to "任务正在运行中"))
         taskService.update(id) { status = TaskStatus.pending; message = "收到续跑请求，准备继续执行..." }
-        pipeline.run(id)
+        try {
+            pipeline.run(id)
+        } catch (e: RejectedExecutionException) {
+            taskService.update(id) { status = TaskStatus.failed; message = "服务繁忙，请稍后再试" }
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(mapOf("error" to "服务繁忙，任务队列已满，请稍后再试"))
+        }
         return ResponseEntity.ok(mapOf("ok" to true))
     }
 
