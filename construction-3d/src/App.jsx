@@ -4,6 +4,7 @@ import TaskSubmit from './components/TaskSubmit'
 import FormatConverter from './components/FormatConverter'
 import TaskList from './components/TaskList'
 import ErrorBoundary from './components/ErrorBoundary'
+import OfflineBanner from './components/OfflineBanner'
 import useUIStore from './stores/uiStore'
 import { useSelectedTask } from './hooks/useTasks'
 import './styles/index.css'
@@ -48,6 +49,7 @@ export default function App() {
 
   return (
     <>
+      <OfflineBanner />
       <header className="header">
         <div className="header-logo">
           <div className="dot" />

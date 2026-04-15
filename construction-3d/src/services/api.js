@@ -23,6 +23,53 @@ const httpUpload = axios.create({
   timeout: 0,
 })
 
+/* ─── 全局响应拦截器 ─────────────────────────────────────── */
+
+function setupInterceptors(instance) {
+  instance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      // 网络完全断开（没有 response 对象）
+      if (!error.response) {
+        if (error.code === 'ECONNABORTED') {
+          error.message = '请求超时，请检查网络连接或后端服务状态'
+        } else {
+          error.message = '无法连接到后端服务，请检查网络连接'
+        }
+        console.warn('[API] 网络错误:', error.message)
+        return Promise.reject(error)
+      }
+
+      const { status, data } = error.response
+
+      // 标准化错误消息
+      switch (status) {
+        case 400:
+          error.message = data?.error || '请求参数错误'
+          break
+        case 404:
+          error.message = data?.error || '资源不存在'
+          break
+        case 503:
+          error.message = data?.error || '服务繁忙，请稍后再试'
+          break
+        case 500:
+          error.message = data?.error || '服务器内部错误，请查看后端日志'
+          break
+        default:
+          error.message = data?.error || `请求失败 (HTTP ${status})`
+      }
+
+      return Promise.reject(error)
+    },
+  )
+}
+
+setupInterceptors(http)
+setupInterceptors(httpUpload)
+
+/* ─── API 函数 ───────────────────────────────────────────── */
+
 /**
  * 提交建模任务（上传图片/视频文件）
  * @param {FileList | File[]} files

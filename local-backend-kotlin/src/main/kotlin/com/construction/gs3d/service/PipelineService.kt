@@ -38,7 +38,7 @@ class PipelineService(
 
         val ssh = try {
             taskService.updateProgress(taskId, 2, "连接云端服务器...", status = TaskStatus.running)
-            sshFactory.connect().also { info(taskId, "SSH 连接成功") }
+            sshFactory.acquire().also { info(taskId, "SSH 连接成功（连接池）") }
         } catch (e: Exception) {
             error(taskId, "SSH 连接失败: ${e.message}")
             taskService.update(taskId) { status = TaskStatus.failed; message = "SSH 连接失败: ${e.message}" }
@@ -83,7 +83,7 @@ class PipelineService(
             taskService.updateProgress(taskId, 99, "导出相机参数...")
             tryExportColmapCameras(ssh, remoteRoot, localModelDir, taskId)
 
-            ssh.close()
+            sshFactory.release(ssh)
 
             val sizeMB = "%.1f".format(localSplat.length().toDouble() / 1024 / 1024)
             info(taskId, "=".repeat(60))
@@ -106,7 +106,7 @@ class PipelineService(
 
         } catch (e: Exception) {
             error(taskId, "任务失败: ${e.message}")
-            runCatching { ssh.close() }
+            sshFactory.destroy(ssh)
             taskService.update(taskId) { status = TaskStatus.failed; message = e.message ?: "训练失败，请查看后端日志" }
         }
     }
