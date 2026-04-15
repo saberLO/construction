@@ -1,0 +1,36 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local config
+.claude/
+*.local
+.env
+.env.*
+
+# Archives
+*.7z
+*.zip
+*.rar
+
+# Python / model / data artifacts
+__pycache__/
+*.pyc
+*.pt
+data/
+logs/
+
+# Frontend
+construction-3d/node_modules/
+construction-3d/dist/
+
+# Backend
+local-backend-kotlin/.gradle/
+local-backend-kotlin/build/
+local-backend-kotlin/.idea/
+local-backend-kotlin/data/
+
+# Misc
+*.log

@@ -1,0 +1,40 @@
+server:
+  port: ${SERVER_PORT:3000}
+
+app:
+  data-dir: ${APP_DATA_DIR:./data}
+  # 允许的前端来源，生产环境改为实际域名
+  cors-origins: ${APP_CORS_ORIGINS:*}
+
+ssh:
+  host: ${SSH_HOST:e1akcj8pfni3zhrisnow.deepln.com}
+  port: ${SSH_PORT:42396}
+  username: ${SSH_USERNAME:root}
+  # 必须通过环境变量 SSH_PASSWORD 提供，禁止硬编码
+  password: ${SSH_PASSWORD}
+
+remote:
+  work-dir: ${REMOTE_WORK_DIR:/data/gs-tasks}
+  python-bin: ${REMOTE_PYTHON_BIN:/data/miniconda/envs/gaussian_splatting/bin/python}
+  train-script: ${REMOTE_TRAIN_SCRIPT:/data/gaussian-splatting/train.py}
+  ply2splat-script: ${REMOTE_PLY2SPLAT_SCRIPT:/data/gaussian-splatting/output/ply2splat_server.py}
+
+vision:
+  model-dir: ${VISION_MODEL_DIR:../model}
+  python-bin: ${VISION_PYTHON_BIN:python}
+  script-path: ${VISION_SCRIPT_PATH:./scripts/yolo_infer.py}
+  confidence: ${VISION_CONFIDENCE:0.25}
+  iou: ${VISION_IOU:0.45}
+  image-size: ${VISION_IMAGE_SIZE:1280}
+  timeout-seconds: ${VISION_TIMEOUT_SECONDS:120}
+
+iterations:
+  low: ${ITERATIONS_LOW:7000}
+  medium: ${ITERATIONS_MEDIUM:15000}
+  high: ${ITERATIONS_HIGH:30000}
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 10GB
